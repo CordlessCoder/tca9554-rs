@@ -17,6 +17,7 @@ pub struct Tca9554<I2C, Int> {
 
 impl<I2C> Tca9554<I2C, NoInterrupts> {
     /// Creates a new driver with the given I²C peripheral and address.
+    #[must_use]
     pub fn new(i2c: I2C, address: Address) -> Self {
         Self {
             i2c,

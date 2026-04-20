@@ -18,6 +18,7 @@ pub struct Interrupts<
 
 impl<I2C, INT, const SUBS: usize, M: RawMutex> Tca9554<I2C, Interrupts<INT, SUBS, M>> {
     /// Creates a new driver with the given I²C peripheral, address, and INT pin.
+    #[must_use]
     pub fn with_int(i2c: I2C, address: Address, int: INT) -> Self {
         Self {
             i2c,
