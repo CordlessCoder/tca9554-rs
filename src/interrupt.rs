@@ -1,7 +1,6 @@
 use crate::pin::read_bit;
-use crate::{Address, Tca9554, driver::ExioPin};
+use crate::{Tca9554, driver::ExioPin};
 use core::fmt::Debug;
-use core::sync::atomic::AtomicU8;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embedded_hal_async::digital::Wait;
 use embedded_hal_async::i2c::I2c;
@@ -12,27 +11,11 @@ pub struct Interrupts<
     const SUBS: usize = 8,
     M: RawMutex = embassy_sync::blocking_mutex::raw::NoopRawMutex,
 > {
-    int: embassy_sync::mutex::Mutex<M, INT>,
-    int_subscribers: embassy_sync::pubsub::PubSubChannel<M, u8, 1, SUBS, 1>,
+    pub(crate) int: embassy_sync::mutex::Mutex<M, INT>,
+    pub(crate) int_subscribers: embassy_sync::pubsub::PubSubChannel<M, u8, 1, SUBS, 1>,
 }
 
 impl<I2C, INT, const SUBS: usize, M: RawMutex> Tca9554<I2C, Interrupts<INT, SUBS, M>> {
-    /// Creates a new driver with the given I²C peripheral, address, and INT pin.
-    #[must_use]
-    pub fn with_int(i2c: I2C, address: Address, int: INT) -> Self {
-        Self {
-            i2c,
-            address,
-            interrupt_handler: Interrupts {
-                int: embassy_sync::mutex::Mutex::new(int),
-                int_subscribers: embassy_sync::pubsub::PubSubChannel::new(),
-            },
-            output_mask: AtomicU8::new(0),
-            polarity_mask: AtomicU8::new(0),
-            direction_mask: AtomicU8::new(0),
-        }
-    }
-
     /// Releases the driver, returning ownership of the I²C peripheral and INT pin.
     pub fn release_int(self) -> (I2C, INT) {
         (self.i2c, self.interrupt_handler.int.into_inner())

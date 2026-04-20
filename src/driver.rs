@@ -28,6 +28,34 @@ impl<I2C> Tca9554<I2C, NoInterrupts> {
             direction_mask: AtomicU8::new(DIRECTION_REGISTER_DEFAULT),
         }
     }
+
+    /// Binds an interrupt pin to this peripheral.
+    #[must_use]
+    #[cfg(feature = "interrupt")]
+    pub fn with_int<INT, const SUBS: usize, M: embassy_sync::blocking_mutex::raw::RawMutex>(
+        self,
+        int: INT,
+    ) -> Tca9554<I2C, crate::interrupt::Interrupts<INT, SUBS, M>> {
+        let Self {
+            i2c,
+            address,
+            output_mask,
+            polarity_mask,
+            direction_mask,
+            interrupt_handler: _,
+        } = self;
+        Tca9554 {
+            i2c,
+            address,
+            interrupt_handler: crate::interrupt::Interrupts {
+                int: embassy_sync::mutex::Mutex::new(int),
+                int_subscribers: embassy_sync::pubsub::PubSubChannel::new(),
+            },
+            output_mask,
+            polarity_mask,
+            direction_mask,
+        }
+    }
 }
 
 impl<I2C, INT> Tca9554<I2C, INT> {
