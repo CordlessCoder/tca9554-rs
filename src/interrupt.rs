@@ -51,7 +51,7 @@ where
 {
     /// Wait for any of the input pins to change state, and read the new pin state mask.
     /// Will keep waiting until the `stop_waiting_cond` returns true.
-    pub async fn wait_for_interrupt_while(
+    pub async fn wait_for_interrupt_with_cond(
         &self,
         mut stop_waiting_cond: impl FnMut(u8) -> bool,
     ) -> Result<u8, InterruptWaitError<INT::Error, I2C::Error>> {
@@ -116,7 +116,7 @@ where
             return Ok(());
         }
         self.0
-            .wait_for_interrupt_while(move |mask| is_wanted_state(read_bit(mask, self.1)))
+            .wait_for_interrupt_with_cond(move |mask| is_wanted_state(read_bit(mask, self.1)))
             .await?;
         Ok(())
     }
@@ -142,6 +142,8 @@ where
             .and_then(|_| self.wait_for(|high| !high))
     }
     fn wait_for_any_edge(&mut self) -> impl Future<Output = Result<(), Self::Error>> {
-        self.0.wait_for_interrupt_while(|_m| true).map_ok(|_| ())
+        self.0
+            .wait_for_interrupt_with_cond(|_m| true)
+            .map_ok(|_| ())
     }
 }
