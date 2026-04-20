@@ -12,17 +12,25 @@ async fn test_write_direction() {
 
 #[pollster::test]
 async fn test_write_output() {
-    let i2c = Mock::new(&[Transaction::write(0x20, vec![0x01, 0xAA])]);
+    let i2c = Mock::new(&[
+        Transaction::write(0x20, vec![0x01, 0xAA]),
+        Transaction::write(0x20, vec![0x01, 0xAB]),
+    ]);
     let mut driver = Tca9554::new(i2c, Address::standard());
     driver.write_output(0xAA).await.unwrap();
+    driver.pin(0).set_output_state(true).await.unwrap();
     driver.release().done();
 }
 
 #[pollster::test]
 async fn test_write_polarity() {
-    let i2c = Mock::new(&[Transaction::write(0x20, vec![0x02, 0xAA])]);
+    let i2c = Mock::new(&[
+        Transaction::write(0x20, vec![0x02, 0xAA]),
+        Transaction::write(0x20, vec![0x02, 0xAB]),
+    ]);
     let mut driver = Tca9554::new(i2c, Address::standard());
     driver.write_polarity(0xAA).await.unwrap();
+    driver.pin(0).set_polarity(true).await.unwrap();
     driver.release().done();
 }
 

@@ -14,10 +14,13 @@ categories = ["no-std", "embedded", "hardware-support"]
 
 [features]
 defmt = ["dep:defmt"]
+interrupt = ["dep:embassy-sync"]
 
 [dependencies]
 embedded-hal-async = { version = "1.0.0" }
 defmt = { version = "1", optional = true }
+embassy-sync = { version = "0.8.0", optional = true }
+futures = { version = "0.3.32", default-features = false }
 
 [dev-dependencies]
 embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
