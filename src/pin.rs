@@ -4,7 +4,7 @@ use futures::TryFutureExt;
 
 use crate::driver::ExioPin;
 
-fn read_bit(mask: u8, bit: u8) -> bool {
+pub(crate) fn read_bit(mask: u8, bit: u8) -> bool {
     (mask >> bit) & 1 != 0
 }
 
@@ -26,7 +26,7 @@ where
     }
 
     /// Reads the value of the input register for this pin.
-    /// Returns: The incoming logic level of this pin, if it's defined as an input.
+    /// Returns: Whether the incoming logic level of this pin is high, if it's defined as an input.
     pub fn read_input(&self) -> impl Future<Output = Result<bool, I2C::Error>> {
         self.0
             .read_input_ref()
