@@ -1,8 +1,8 @@
-use core::sync::atomic::Ordering::Relaxed;
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embedded_hal_async::i2c::I2c;
 use futures::TryFutureExt;
 
-use crate::driver::ExioPin;
+use crate::driver::{ExioPin, Register, write_register};
 
 pub(crate) fn read_bit(mask: u8, bit: u8) -> bool {
     (mask >> bit) & 1 != 0
@@ -13,7 +13,7 @@ fn with_bit(mask: u8, bit: u8, value: bool) -> u8 {
     mask & !bit | bit
 }
 
-impl<I2C, INT> ExioPin<'_, I2C, INT>
+impl<I2C, INT, M: RawMutex> ExioPin<'_, I2C, INT, M>
 where
     I2C: I2c + Clone,
 {
@@ -50,23 +50,50 @@ where
     }
 
     /// Sets this output pin low or high.
-    pub fn set_output_state(&self, high: bool) -> impl Future<Output = Result<(), I2C::Error>> {
-        self.0
-            .write_output_ref(with_bit(self.0.output_mask.load(Relaxed), self.1, high))
+    /// Updates the output register atomically with other pin updates on this driver.
+    pub async fn set_output_state(&self, high: bool) -> Result<(), I2C::Error> {
+        let mut cache = self.0.register_cache.lock().await;
+        let state = with_bit(cache.output, self.1, high);
+        write_register(
+            &mut self.0.i2c.clone(),
+            self.0.address,
+            Register::Output,
+            state,
+        )
+        .await?;
+        cache.output = state;
+        Ok(())
     }
 
     /// Sets this output pin low or high.
-    pub fn set_polarity(&self, inverted: bool) -> impl Future<Output = Result<(), I2C::Error>> {
-        self.0.write_polarity_ref(with_bit(
-            self.0.polarity_mask.load(Relaxed),
-            self.1,
-            inverted,
-        ))
+    /// Updates the polarity register atomically with other pin updates on this driver.
+    pub async fn set_polarity(&self, inverted: bool) -> Result<(), I2C::Error> {
+        let mut cache = self.0.register_cache.lock().await;
+        let state = with_bit(cache.polarity, self.1, inverted);
+        write_register(
+            &mut self.0.i2c.clone(),
+            self.0.address,
+            Register::Polarity,
+            state,
+        )
+        .await?;
+        cache.polarity = state;
+        Ok(())
     }
 
     /// Configures this pin as an input or output.
-    pub fn set_input(&self, input: bool) -> impl Future<Output = Result<(), I2C::Error>> {
-        self.0
-            .write_direction_ref(with_bit(self.0.direction_mask.load(Relaxed), self.1, input))
+    /// Updates the direction register atomically with other pin updates on this driver.
+    pub async fn set_input(&self, input: bool) -> Result<(), I2C::Error> {
+        let mut cache = self.0.register_cache.lock().await;
+        let state = with_bit(cache.direction, self.1, input);
+        write_register(
+            &mut self.0.i2c.clone(),
+            self.0.address,
+            Register::Direction,
+            state,
+        )
+        .await?;
+        cache.direction = state;
+        Ok(())
     }
 }

@@ -22,7 +22,7 @@ impl Address {
         Self(0x70 >> 1)
     }
 
-    /// Sets the user selectable, rightmost bits in the address: `(a3, a2, a1)`.
+    /// Sets the user selectable, rightmost bits in the address: `(a2, a1, a0)`.
     pub fn with_selectable_bits(self, ax: (bool, bool, bool)) -> Self {
         let (a2, a1, a0) = ax;
         let bits = ((a2 as u8) << 2) | ((a1 as u8) << 1) | a0 as u8;
@@ -54,9 +54,15 @@ mod tests {
 
     #[test]
     fn test_with_selectable_bits() {
-        let addr: SevenBitAddress = Address::standard()
-            .with_selectable_bits((false, true, false))
-            .into();
-        assert_eq!(addr, 0x22);
+        for bits in 0..8 {
+            let selectable = (bits & 0b100 != 0, bits & 0b010 != 0, bits & 0b001 != 0);
+            let standard: SevenBitAddress =
+                Address::standard().with_selectable_bits(selectable).into();
+            let alternate: SevenBitAddress =
+                Address::alternate().with_selectable_bits(selectable).into();
+
+            assert_eq!(standard, 0x20 | bits);
+            assert_eq!(alternate, 0x38 | bits);
+        }
     }
 }

@@ -15,7 +15,9 @@ pub struct Interrupts<
     pub(crate) int_subscribers: embassy_sync::pubsub::PubSubChannel<M, u8, 1, SUBS, 1>,
 }
 
-impl<I2C, INT, const SUBS: usize, M: RawMutex> Tca9554<I2C, Interrupts<INT, SUBS, M>> {
+impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex>
+    Tca9554<I2C, Interrupts<INT, SUBS, IM>, PM>
+{
     /// Releases the driver, returning ownership of the I²C peripheral and INT pin.
     pub fn release_int(self) -> (I2C, INT) {
         (self.i2c, self.interrupt_handler.int.into_inner())
@@ -44,7 +46,8 @@ impl<INT: Debug, I2C> embedded_hal::digital::Error for InterruptWaitError<INT, I
     }
 }
 
-impl<I2C, INT, const SUBS: usize, M: RawMutex> Tca9554<I2C, Interrupts<INT, SUBS, M>>
+impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex>
+    Tca9554<I2C, Interrupts<INT, SUBS, IM>, PM>
 where
     INT: Wait,
     I2C: I2c + Clone,
@@ -60,18 +63,21 @@ where
                 // We are the first to wait for the interrupt, we should publish to everyone else
                 use embassy_sync::pubsub::PubSubBehavior;
 
-                int.wait_for_low()
-                    .await
-                    .map_err(InterruptWaitError::InterruptError)?;
-                core::mem::drop(int);
-                let pins = self
-                    .read_input_ref()
-                    .await
-                    .map_err(InterruptWaitError::I2CError)?;
-                self.interrupt_handler
-                    .int_subscribers
-                    .publish_immediate(pins);
-                Ok(pins)
+                loop {
+                    int.wait_for_low()
+                        .await
+                        .map_err(InterruptWaitError::InterruptError)?;
+                    let pins = self
+                        .read_input_ref()
+                        .await
+                        .map_err(InterruptWaitError::I2CError)?;
+                    self.interrupt_handler
+                        .int_subscribers
+                        .publish_immediate(pins);
+                    if stop_waiting_cond(pins) {
+                        return Ok(pins);
+                    }
+                }
             }
             Err(_) => {
                 let mut sub = self
@@ -90,8 +96,8 @@ where
     }
 }
 
-impl<I2C, INT, const SUBS: usize, M: RawMutex> embedded_hal::digital::ErrorType
-    for ExioPin<'_, I2C, Interrupts<INT, SUBS, M>>
+impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex> embedded_hal::digital::ErrorType
+    for ExioPin<'_, I2C, Interrupts<INT, SUBS, IM>, PM>
 where
     INT: Wait,
     I2C: I2c + Clone,
@@ -99,7 +105,8 @@ where
     type Error = InterruptWaitError<INT::Error, I2C::Error>;
 }
 
-impl<I2C, INT, const SUBS: usize, M: RawMutex> ExioPin<'_, I2C, Interrupts<INT, SUBS, M>>
+impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex>
+    ExioPin<'_, I2C, Interrupts<INT, SUBS, IM>, PM>
 where
     INT: Wait,
     I2C: I2c + Clone,
@@ -122,7 +129,8 @@ where
     }
 }
 
-impl<I2C, INT, const SUBS: usize, M: RawMutex> Wait for ExioPin<'_, I2C, Interrupts<INT, SUBS, M>>
+impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex> Wait
+    for ExioPin<'_, I2C, Interrupts<INT, SUBS, IM>, PM>
 where
     INT: Wait,
     I2C: I2c + Clone,

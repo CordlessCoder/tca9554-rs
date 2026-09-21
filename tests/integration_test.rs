@@ -2,6 +2,13 @@ use embedded_hal_async::i2c::{ErrorKind, NoAcknowledgeSource};
 use embedded_hal_mock::eh1::i2c::{Mock, Transaction};
 use tca9554::{Address, Tca9554};
 
+#[cfg(feature = "interrupt")]
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+#[cfg(feature = "interrupt")]
+use embedded_hal_async::digital::Wait;
+#[cfg(feature = "interrupt")]
+use embedded_hal_mock::eh1::digital::{Mock as PinMock, State, Transaction as PinTransaction};
+
 #[pollster::test]
 async fn test_write_direction() {
     let i2c = Mock::new(&[Transaction::write(0x20, vec![0x03, 0xAA])]);
@@ -18,7 +25,7 @@ async fn test_write_output() {
     ]);
     let mut driver = Tca9554::new(i2c, Address::standard());
     driver.write_output(0xAA).await.unwrap();
-    driver.pin(0).set_output_state(true).await.unwrap();
+    driver.pin(0).unwrap().set_output_state(true).await.unwrap();
     driver.release().done();
 }
 
@@ -30,7 +37,7 @@ async fn test_write_polarity() {
     ]);
     let mut driver = Tca9554::new(i2c, Address::standard());
     driver.write_polarity(0xAA).await.unwrap();
-    driver.pin(0).set_polarity(true).await.unwrap();
+    driver.pin(0).unwrap().set_polarity(true).await.unwrap();
     driver.release().done();
 }
 
@@ -61,4 +68,32 @@ async fn test_reset() {
     let mut driver = Tca9554::new(i2c, Address::standard());
     driver.reset().await.unwrap();
     driver.release().done();
+}
+
+#[pollster::test]
+async fn test_pin_bounds() {
+    let i2c = Mock::new(&[]);
+    let driver = Tca9554::new(i2c, Address::standard());
+    assert!(driver.pin(7).is_some());
+    assert!(driver.pin(8).is_none());
+    driver.release().done();
+}
+
+#[cfg(feature = "interrupt")]
+#[pollster::test]
+async fn test_interrupt_wait_ignores_unrelated_first_event() {
+    let i2c = Mock::new(&[
+        Transaction::write_read(0x20, vec![0x00], vec![0x00]),
+        Transaction::write_read(0x20, vec![0x00], vec![0x02]),
+        Transaction::write_read(0x20, vec![0x00], vec![0x01]),
+    ]);
+    let int = PinMock::new(&[
+        PinTransaction::wait_for_state(State::Low),
+        PinTransaction::wait_for_state(State::Low),
+    ]);
+    let driver = Tca9554::new(i2c, Address::standard()).with_int::<_, 8, NoopRawMutex>(int);
+    driver.pin(0).unwrap().wait_for_high().await.unwrap();
+    let (mut i2c, mut int) = driver.release_int();
+    i2c.done();
+    int.done();
 }

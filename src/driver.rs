@@ -1,21 +1,20 @@
 use crate::Address;
-use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
+use embassy_sync::blocking_mutex::raw::{NoopRawMutex, RawMutex};
+use embassy_sync::mutex::Mutex;
 use embedded_hal_async::i2c::I2c;
 
 pub struct NoInterrupts;
 
 /// Driver for a TCA9554(A) I/O expander.
-pub struct Tca9554<I2C, Int> {
+pub struct Tca9554<I2C, Int, M: RawMutex = NoopRawMutex> {
     pub(crate) i2c: I2C,
     pub(crate) address: Address,
     #[cfg_attr(not(feature = "interrupt"), allow(unused))]
     pub(crate) interrupt_handler: Int,
-    pub(crate) output_mask: AtomicU8,
-    pub(crate) polarity_mask: AtomicU8,
-    pub(crate) direction_mask: AtomicU8,
+    pub(crate) register_cache: Mutex<M, RegisterCache>,
 }
 
-impl<I2C> Tca9554<I2C, NoInterrupts> {
+impl<I2C> Tca9554<I2C, NoInterrupts, NoopRawMutex> {
     /// Creates a new driver with the given I²C peripheral and address.
     #[must_use]
     pub fn new(i2c: I2C, address: Address) -> Self {
@@ -23,9 +22,7 @@ impl<I2C> Tca9554<I2C, NoInterrupts> {
             i2c,
             address,
             interrupt_handler: NoInterrupts,
-            output_mask: AtomicU8::new(OUTPUT_REGISTER_DEFAULT),
-            polarity_mask: AtomicU8::new(POLARITY_REGISTER_DEFAULT),
-            direction_mask: AtomicU8::new(DIRECTION_REGISTER_DEFAULT),
+            register_cache: Mutex::new(RegisterCache::default()),
         }
     }
 
@@ -35,13 +32,11 @@ impl<I2C> Tca9554<I2C, NoInterrupts> {
     pub fn with_int<INT, const SUBS: usize, M: embassy_sync::blocking_mutex::raw::RawMutex>(
         self,
         int: INT,
-    ) -> Tca9554<I2C, crate::interrupt::Interrupts<INT, SUBS, M>> {
+    ) -> Tca9554<I2C, crate::interrupt::Interrupts<INT, SUBS, M>, M> {
         let Self {
             i2c,
             address,
-            output_mask,
-            polarity_mask,
-            direction_mask,
+            register_cache,
             interrupt_handler: _,
         } = self;
         Tca9554 {
@@ -51,14 +46,12 @@ impl<I2C> Tca9554<I2C, NoInterrupts> {
                 int: embassy_sync::mutex::Mutex::new(int),
                 int_subscribers: embassy_sync::pubsub::PubSubChannel::new(),
             },
-            output_mask,
-            polarity_mask,
-            direction_mask,
+            register_cache: Mutex::new(register_cache.into_inner()),
         }
     }
 }
 
-impl<I2C, INT> Tca9554<I2C, INT> {
+impl<I2C, INT, M: RawMutex> Tca9554<I2C, INT, M> {
     /// Gets the I²C used by the driver.
     pub fn address(&self) -> Address {
         self.address
@@ -84,40 +77,52 @@ const OUTPUT_REGISTER_DEFAULT: u8 = 0xFF;
 const POLARITY_REGISTER_DEFAULT: u8 = 0x00;
 const DIRECTION_REGISTER_DEFAULT: u8 = 0xFF;
 
-static DUMMY_MASK: AtomicU8 = AtomicU8::new(0);
+pub(crate) struct RegisterCache {
+    pub(crate) output: u8,
+    pub(crate) polarity: u8,
+    pub(crate) direction: u8,
+}
+
+impl Default for RegisterCache {
+    fn default() -> Self {
+        Self {
+            output: OUTPUT_REGISTER_DEFAULT,
+            polarity: POLARITY_REGISTER_DEFAULT,
+            direction: DIRECTION_REGISTER_DEFAULT,
+        }
+    }
+}
 
 /// Writes a value to a register.
-async fn write_register<I: I2c>(
+pub(crate) async fn write_register<I: I2c>(
     i2c: &mut I,
     address: Address,
     register: Register,
     value: u8,
-    store_into: &AtomicU8,
 ) -> Result<(), I::Error> {
     i2c.write(address.into(), &[register as u8, value]).await?;
-    store_into.store(value, Relaxed);
     Ok(())
 }
 
 /// Reads the value from a register.
-async fn read_register<I: I2c>(
+pub(crate) async fn read_register<I: I2c>(
     i2c: &mut I,
     address: Address,
     register: Register,
-    store_into: &AtomicU8,
 ) -> Result<u8, I::Error> {
     let mut read_buf = [0u8];
     i2c.write_read(address.into(), &[register as u8], &mut read_buf)
         .await?;
-    let res = read_buf[0];
-    store_into.store(res, Relaxed);
-    Ok(res)
+    Ok(read_buf[0])
 }
 
 #[derive(Clone)]
-pub struct ExioPin<'io, I2C, INT>(pub(crate) &'io Tca9554<I2C, INT>, pub(crate) u8);
+pub struct ExioPin<'io, I2C, INT, M: RawMutex = NoopRawMutex>(
+    pub(crate) &'io Tca9554<I2C, INT, M>,
+    pub(crate) u8,
+);
 
-impl<I2C, INT> Tca9554<I2C, INT>
+impl<I2C, INT, M: RawMutex> Tca9554<I2C, INT, M>
 where
     I2C: I2c,
 {
@@ -131,70 +136,55 @@ where
 
     /// Reads the value of the input register.
     pub fn read_input(&mut self) -> impl Future<Output = Result<u8, I2C::Error>> {
-        read_register(&mut self.i2c, self.address, Register::Input, &DUMMY_MASK)
+        read_register(&mut self.i2c, self.address, Register::Input)
     }
 
     /// Reads the value of the output register.
-    pub fn read_output(&mut self) -> impl Future<Output = Result<u8, I2C::Error>> {
-        read_register(
-            &mut self.i2c,
-            self.address,
-            Register::Output,
-            &self.output_mask,
-        )
+    pub async fn read_output(&mut self) -> Result<u8, I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c, self.address, Register::Output).await?;
+        cache.output = value;
+        Ok(value)
     }
 
     /// Writes the value of the output register.
-    pub fn write_output(&mut self, state: u8) -> impl Future<Output = Result<(), I2C::Error>> {
-        write_register(
-            &mut self.i2c,
-            self.address,
-            Register::Output,
-            state,
-            &self.output_mask,
-        )
+    pub async fn write_output(&mut self, state: u8) -> Result<(), I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        write_register(&mut self.i2c, self.address, Register::Output, state).await?;
+        cache.output = state;
+        Ok(())
     }
 
     /// Reads the value of the polarity inversion register.
-    pub fn read_polarity(&mut self) -> impl Future<Output = Result<u8, I2C::Error>> {
-        read_register(
-            &mut self.i2c,
-            self.address,
-            Register::Polarity,
-            &self.polarity_mask,
-        )
+    pub async fn read_polarity(&mut self) -> Result<u8, I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c, self.address, Register::Polarity).await?;
+        cache.polarity = value;
+        Ok(value)
     }
 
     /// Writes the value of polarity inversion register.
-    pub fn write_polarity(&mut self, state: u8) -> impl Future<Output = Result<(), I2C::Error>> {
-        write_register(
-            &mut self.i2c,
-            self.address,
-            Register::Polarity,
-            state,
-            &self.polarity_mask,
-        )
+    pub async fn write_polarity(&mut self, state: u8) -> Result<(), I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        write_register(&mut self.i2c, self.address, Register::Polarity, state).await?;
+        cache.polarity = state;
+        Ok(())
     }
 
     /// Reads the value of the direction register.
-    pub fn read_direction(&mut self) -> impl Future<Output = Result<u8, I2C::Error>> {
-        read_register(
-            &mut self.i2c,
-            self.address,
-            Register::Direction,
-            &self.direction_mask,
-        )
+    pub async fn read_direction(&mut self) -> Result<u8, I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c, self.address, Register::Direction).await?;
+        cache.direction = value;
+        Ok(value)
     }
 
     /// Writes the value of the direction register.
-    pub fn write_direction(&mut self, state: u8) -> impl Future<Output = Result<(), I2C::Error>> {
-        write_register(
-            &mut self.i2c,
-            self.address,
-            Register::Direction,
-            state,
-            &self.direction_mask,
-        )
+    pub async fn write_direction(&mut self, state: u8) -> Result<(), I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
+        write_register(&mut self.i2c, self.address, Register::Direction, state).await?;
+        cache.direction = state;
+        Ok(())
     }
 
     /// Writes the state of the registers to the chip's power-on defaults.
@@ -205,8 +195,7 @@ where
         Ok(())
     }
 
-    /// Returns whether or not the current state of the registers
-    /// matches the chip's power-on defaults.
+    /// Returns whether the cached register state matches the chip's power-on defaults.
     ///
     /// When the chip is functioning properly, the registers will match
     /// the power-on defaults after power has been applied or after
@@ -219,90 +208,72 @@ where
     }
 }
 
-impl<I2C, INT> Tca9554<I2C, INT>
+impl<I2C, INT, M: RawMutex> Tca9554<I2C, INT, M>
 where
     I2C: I2c + Clone,
 {
     /// Reads the value of the input register.
     pub async fn read_input_ref(&self) -> Result<u8, I2C::Error> {
-        read_register(
-            &mut self.i2c.clone(),
-            self.address,
-            Register::Input,
-            &DUMMY_MASK,
-        )
-        .await
+        read_register(&mut self.i2c.clone(), self.address, Register::Input).await
     }
 
     /// Reads the value of the output register.
     pub async fn read_output_ref(&self) -> Result<u8, I2C::Error> {
-        read_register(
-            &mut self.i2c.clone(),
-            self.address,
-            Register::Output,
-            &self.output_mask,
-        )
-        .await
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c.clone(), self.address, Register::Output).await?;
+        cache.output = value;
+        Ok(value)
     }
 
     /// Writes the value of the output register.
     pub async fn write_output_ref(&self, state: u8) -> Result<(), I2C::Error> {
-        write_register(
-            &mut self.i2c.clone(),
-            self.address,
-            Register::Output,
-            state,
-            &self.output_mask,
-        )
-        .await?;
+        let mut cache = self.register_cache.lock().await;
+        write_register(&mut self.i2c.clone(), self.address, Register::Output, state).await?;
+        cache.output = state;
         Ok(())
     }
 
     /// Reads the value of the polarity inversion register.
     pub async fn read_polarity_ref(&self) -> Result<u8, I2C::Error> {
-        read_register(
-            &mut self.i2c.clone(),
-            self.address,
-            Register::Polarity,
-            &self.polarity_mask,
-        )
-        .await
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c.clone(), self.address, Register::Polarity).await?;
+        cache.polarity = value;
+        Ok(value)
     }
 
     /// Writes the value of polarity inversion register.
     pub async fn write_polarity_ref(&self, state: u8) -> Result<(), I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
         write_register(
             &mut self.i2c.clone(),
             self.address,
             Register::Polarity,
             state,
-            &self.polarity_mask,
         )
         .await?;
+        cache.polarity = state;
         Ok(())
     }
 
     /// Reads the value of the direction register.
     pub async fn read_direction_ref(&self) -> Result<u8, I2C::Error> {
-        read_register(
-            &mut self.i2c.clone(),
-            self.address,
-            Register::Direction,
-            &self.direction_mask,
-        )
-        .await
+        let mut cache = self.register_cache.lock().await;
+        let value = read_register(&mut self.i2c.clone(), self.address, Register::Direction).await?;
+        cache.direction = value;
+        Ok(value)
     }
 
     /// Writes the value of the direction register.
     pub async fn write_direction_ref(&self, state: u8) -> Result<(), I2C::Error> {
+        let mut cache = self.register_cache.lock().await;
         write_register(
             &mut self.i2c.clone(),
             self.address,
             Register::Direction,
             state,
-            &self.direction_mask,
         )
         .await?;
+        cache.direction = state;
         Ok(())
     }
 
@@ -314,20 +285,22 @@ where
         Ok(())
     }
 
-    /// Returns whether or not the current state of the registers
-    /// matches the chip's power-on defaults.
+    /// Returns whether the cached register state matches the chip's power-on defaults.
     ///
     /// When the chip is functioning properly, the registers will match
     /// the power-on defaults after power has been applied or after
     /// a call to [`Self::reset_ref()`].
-    pub fn is_in_default_state_ref(&self) -> bool {
-        self.direction_mask.load(Relaxed) == DIRECTION_REGISTER_DEFAULT
-            && self.polarity_mask.load(Relaxed) == POLARITY_REGISTER_DEFAULT
-            && self.output_mask.load(Relaxed) == OUTPUT_REGISTER_DEFAULT
+    pub async fn is_in_default_state_ref(&self) -> bool {
+        let cache = self.register_cache.lock().await;
+        cache.direction == DIRECTION_REGISTER_DEFAULT
+            && cache.polarity == POLARITY_REGISTER_DEFAULT
+            && cache.output == OUTPUT_REGISTER_DEFAULT
     }
 
-    /// Creates a view restricted to a specific pin of the IO Extender.
-    pub fn pin<'io>(&'io self, pin: u8) -> ExioPin<'io, I2C, INT> {
-        ExioPin(self, pin)
+    /// Creates a view restricted to a specific pin of the I/O expander.
+    ///
+    /// Returns `None` when `pin` is greater than 7.
+    pub fn pin<'io>(&'io self, pin: u8) -> Option<ExioPin<'io, I2C, INT, M>> {
+        (pin < 8).then_some(ExioPin(self, pin))
     }
 }
