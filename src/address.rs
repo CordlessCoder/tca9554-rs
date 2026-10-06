@@ -13,17 +13,17 @@ pub struct Address(SevenBitAddress);
 
 impl Address {
     /// Address for the standard variant of the chip (model TCA9554).
-    pub fn standard() -> Self {
+    pub const fn standard() -> Self {
         Self(0x40 >> 1)
     }
 
     /// Address for the alternate variant of the chip (model TCA9554A).
-    pub fn alternate() -> Self {
+    pub const fn alternate() -> Self {
         Self(0x70 >> 1)
     }
 
     /// Sets the user selectable, rightmost bits in the address: `(a2, a1, a0)`.
-    pub fn with_selectable_bits(self, ax: (bool, bool, bool)) -> Self {
+    pub const fn with_selectable_bits(self, ax: (bool, bool, bool)) -> Self {
         let (a2, a1, a0) = ax;
         let bits = ((a2 as u8) << 2) | ((a1 as u8) << 1) | a0 as u8;
         Self(self.0 | bits)
@@ -50,6 +50,13 @@ mod tests {
     fn test_alternate() {
         let addr: SevenBitAddress = Address::alternate().into();
         assert_eq!(addr, 0x38);
+    }
+
+    #[test]
+    fn test_const_address() {
+        const ADDRESS: Address = Address::standard().with_selectable_bits((false, true, false));
+        let addr: SevenBitAddress = ADDRESS.into();
+        assert_eq!(addr, 0x22);
     }
 
     #[test]
