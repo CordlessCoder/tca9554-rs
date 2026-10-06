@@ -9,6 +9,19 @@ use embedded_hal_async::digital::Wait;
 #[cfg(feature = "interrupt")]
 use embedded_hal_mock::eh1::digital::{Mock as PinMock, State, Transaction as PinTransaction};
 
+/// Builds a driver whose type is named without its interrupt and mutex parameters.
+fn driver(i2c: Mock) -> Tca9554<Mock> {
+    Tca9554::new(i2c, Address::standard())
+}
+
+#[pollster::test]
+async fn test_driver_type_names_its_defaults() {
+    let i2c = Mock::new(&[Transaction::write(0x20, vec![0x03, 0x55])]);
+    let mut driver = driver(i2c);
+    driver.write_direction(0x55).await.unwrap();
+    driver.release().done();
+}
+
 #[pollster::test]
 async fn test_write_direction() {
     let i2c = Mock::new(&[Transaction::write(0x20, vec![0x03, 0xAA])]);

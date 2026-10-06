@@ -11,4 +11,6 @@ mod interrupt;
 mod pin;
 
 pub use address::Address;
-pub use driver::Tca9554;
+pub use driver::{ExioPin, NoInterrupts, Tca9554};
+#[cfg(feature = "interrupt")]
+pub use interrupt::{InterruptWaitError, Interrupts};

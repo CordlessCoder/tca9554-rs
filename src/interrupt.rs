@@ -6,6 +6,7 @@ use embedded_hal_async::digital::Wait;
 use embedded_hal_async::i2c::I2c;
 use futures::TryFutureExt;
 
+/// The driver's interrupt handling with an interrupt pin bound, from [`Tca9554::with_int`].
 pub struct Interrupts<
     INT,
     const SUBS: usize = 8,
@@ -24,9 +25,13 @@ impl<I2C, INT, const SUBS: usize, IM: RawMutex, PM: RawMutex>
     }
 }
 
+/// Why waiting for an interrupt failed.
 pub enum InterruptWaitError<INT, I2C> {
+    /// Waiting on the interrupt pin failed.
     InterruptError(INT),
+    /// Reading the input register failed.
     I2CError(I2C),
+    /// All `SUBS` places for the waiters behind the first were taken.
     TooManySubscribers,
 }
 

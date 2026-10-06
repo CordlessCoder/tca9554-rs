@@ -3,10 +3,11 @@ use embassy_sync::blocking_mutex::raw::{NoopRawMutex, RawMutex};
 use embassy_sync::mutex::Mutex;
 use embedded_hal_async::i2c::I2c;
 
+/// The driver's interrupt handling when no interrupt pin is bound.
 pub struct NoInterrupts;
 
 /// Driver for a TCA9554(A) I/O expander.
-pub struct Tca9554<I2C, Int, M: RawMutex = NoopRawMutex> {
+pub struct Tca9554<I2C, Int = NoInterrupts, M: RawMutex = NoopRawMutex> {
     pub(crate) i2c: I2C,
     pub(crate) address: Address,
     #[cfg_attr(not(feature = "interrupt"), allow(unused))]
@@ -116,6 +117,7 @@ pub(crate) async fn read_register<I: I2c>(
     Ok(read_buf[0])
 }
 
+/// One pin of the I/O expander, from [`Tca9554::pin`].
 #[derive(Clone)]
 pub struct ExioPin<'io, I2C, INT, M: RawMutex = NoopRawMutex>(
     pub(crate) &'io Tca9554<I2C, INT, M>,
